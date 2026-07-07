@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - master
+  workflow_dispatch: # <--- Добавь эту строчку для ручного запуска
 
 env:
   CMAKE_VERSION: 3.25.2
+# ... дальше весь код остаётся без изменений
   LLVM_VERSION: 15.0.6
   NDK_VERSION: r25b
 
