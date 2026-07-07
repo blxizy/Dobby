@@ -1,5 +1,4 @@
 import os
-import pipes
 import re
 import shutil
 import subprocess
@@ -106,6 +105,277 @@ class LinuxPlatformBuilder(PlatformBuilder):
 
   def __init__(self, project_dir, library_build_type, arch):
     super().__init__(project_dir, library_build_type, "linux", arch)
+
+    self.shared_output_name = "libdobby.so"
+    self.static_output_name = "libdobby.a"
+
+    targets = {
+      "x86": "i686-linux-gnu",
+      "x86_64": "x86_64-linux-gnu",
+      "arm": "arm-linux-gnueabi",
+      "aarch64": "aarch64-linux-gnu",
+    }
+
+    # self.cmake_args += ["--target={}".format(targets[arch])]
+    self.cmake_args += [
+      "-DCMAKE_SYSTEM_NAME=Linux",
+      "-DCMAKE_SYSTEM_PROCESSOR={}".format(arch),
+    ]
+
+
+class AndroidPlatformBuilder(PlatformBuilder):
+
+  def __init__(self, android_nkd_dir, project_dir, library_build_type, arch):
+    super().__init__(project_dir, library_build_type, "android", arch)
+
+    self.shared_output_name = "libdobby.so"
+    self.static_output_name = "libdobby.a"
+
+    android_api_level = 21
+    if arch == "armeabi-v7a" or arch == "x86":
+      android_api_level = 19
+
+    self.cmake_args += [
+      "-DCMAKE_SYSTEM_NAME=Android", f"-DCMAKE_ANDROID_NDK={android_nkd_dir}", f"-DCMAKE_ANDROID_ARCH_ABI={arch}",
+      f"-DCMAKE_SYSTEM_VERSION={android_api_level}"
+    ]
+
+
+class DarwinPlatformBuilder(PlatformBuilder):
+
+  def __init__(self, project_dir, library_build_type, platform, arch):
+    super().__init__(project_dir, library_build_type, platform, arch)
+
+    self.cmake_args += [
+      "-DCMAKE_OSX_ARCHITECTURES={}".format(arch),
+      "-DCMAKE_SYSTEM_PROCESSOR={}".format(arch),
+    ]
+
+    if platform == "macos":
+      self.cmake_args += ["-DCMAKE_SYSTEM_NAME=Darwin"]
+    elif platform == "iphoneos":
+      self.cmake_args += ["-DCMAKE_SYSTEM_NAME=iOS", "-DCMAKE_OSX_DEPLOYMENT_TARGET=9.3"]
+    
+    sdk_name = "macosx" if platform == "macos" else "iphoneos"
+    sdk_path = subprocess.run(f"xcrun --sdk {sdk_name} --show-sdk-path", shell=True, stdout=subprocess.PIPE, check=True)
+    sdk_path = sdk_path.stdout.decode("utf-8").strip()
+    self.cmake_args += [f"-DCMAKE_OSX_SYSROOT={sdk_path}"]
+
+    self.shared_output_name = "libdobby.dylib"
+    self.static_output_name = "libdobby.a"
+
+  @classmethod
+  def lipo_create_fat(cls, project_dir, platform, output_name):
+    files = list()
+    archs = platforms[platform]
+    for arch in archs:
+      file = f"{project_dir}/build/{platform}/{arch}/{output_name}"
+      files.append(file)
+
+    fat_output_dir = f"{project_dir}/build/{platform}/universal"
+    subprocess.run(["mkdir", "-p", "{}".format(fat_output_dir)], check=True)
+    cmd = ["lipo", "-create"] + files + ["-output", f"{fat_output_dir}/{output_name}"]
+    subprocess.run(cmd, check=True)
+
+
+if __name__ == "__main__":
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--platform", type=str, required=True)
+  parser.add_argument("--arch", type=str, required=True)
+  parser.add_argument("--library_build_type", type=str, default="static")
+  parser.add_argument("--android_ndk_dir", type=str)
+  parser.add_argument("--cmake_dir", type=str)
+  parser.add_argument("--llvm_dir", type=str)
+  args = parser.parse_args()
+
+  logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+  platform = args.platform
+  arch = args.arch
+  library_build_type = args.library_build_type
+
+  PlatformBuilder.cmake_dir = args.cmake_dir
+  PlatformBuilder.llvm_dir = args.llvm_dir
+
+  project_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+  logging.info("project dir: {}".format(project_dir))
+  if not os.path.exists(f"{project_dir}/CMakeLists.txt"):
+    logging.error("Please run this script in Dobby project root directory")
+    sys.exit(1)
+
+  if platform not in platforms:
+    logging.error("invalid platform {}".format(platform))
+    sys.exit(-1)
+
+  if arch != "all" and arch not in platforms[platform]:
+    logging.error("invalid arch {} for platform {}".format(arch, platform))
+    sys.exit(-1)
+
+  if platform == "android":
+    if args.android_ndk_dir is None:
+      logging.error("ndk dir is required for android platform")
+      sys.exit(-1)
+
+  archs = list()
+  if arch == "all":
+    archs = platforms[platform]
+  else:
+    archs.append(arch)
+  logging.info("build platform: {}, archs: {}".format(platform, archs))
+
+  builder: PlatformBuilder = None
+  for arch_ in archs:
+    if platform == "macos":
+      builder = DarwinPlatformBuilder(project_dir, library_build_type, platform, arch_)
+    elif platform == "iphoneos":
+      builder = DarwinPlatformBuilder(project_dir, library_build_type, platform, arch_)
+    elif platform == "android":
+      builder = AndroidPlatformBuilder(args.android_ndk_dir, project_dir, library_build_type, arch_)
+    elif platform == "linux":
+      builder = LinuxPlatformBuilder(project_dir, library_build_type, arch_)
+    else:
+      logging.error("invalid platform {}".format(platform))
+      sys.exit(-1)
+    logging.info(
+      f"build platform: {platform}, arch: {arch_}, cmake_build_dir: {builder.cmake_build_dir}, output_dir: {builder.output_dir}"
+    )
+    builder.build()
+
+  if platform in ["iphoneos", "macos"] and arch == "all":
+    DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.shared_output_name)
+    DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.static_output_name)      "x86_64": "x86_64-linux-gnu",
+      "arm": "arm-linux-gnueabi",
+      "aarch64": "aarch64-linux-gnu",
+    }
+
+    # self.cmake_args += ["--target={}".format(targets[arch])]
+    self.cmake_args += [
+      "-DCMAKE_SYSTEM_NAME=Linux",
+      "-DCMAKE_SYSTEM_PROCESSOR={}".format(arch),
+    ]
+
+
+class AndroidPlatformBuilder(PlatformBuilder):
+
+  def __init__(self, android_nkd_dir, project_dir, library_build_type, arch):
+    super().__init__(project_dir, library_build_type, "android", arch)
+
+    self.shared_output_name = "libdobby.so"
+    self.static_output_name = "libdobby.a"
+
+    android_api_level = 21
+    if arch == "armeabi-v7a" or arch == "x86":
+      android_api_level = 19
+
+    self.cmake_args += [
+      "-DCMAKE_SYSTEM_NAME=Android", f"-DCMAKE_ANDROID_NDK={android_nkd_dir}", f"-DCMAKE_ANDROID_ARCH_ABI={arch}",
+      f"-DCMAKE_SYSTEM_VERSION={android_api_level}"
+    ]
+
+
+class DarwinPlatformBuilder(PlatformBuilder):
+
+  def __init__(self, project_dir, library_build_type, platform, arch):
+    super().__init__(project_dir, library_build_type, platform, arch)
+
+    self.cmake_args += [
+      "-DCMAKE_OSX_ARCHITECTURES={}".format(arch),
+      "-DCMAKE_SYSTEM_PROCESSOR={}".format(arch),
+    ]
+
+    if platform == "macos":
+      self.cmake_args += ["-DCMAKE_SYSTEM_NAME=Darwin"]
+    elif platform == "iphoneos":
+      self.cmake_args += ["-DCMAKE_SYSTEM_NAME=iOS", "-DCMAKE_OSX_DEPLOYMENT_TARGET=9.3"]
+    
+    sdk_name = "macosx" if platform == "macos" else "iphoneos"
+    sdk_path = subprocess.run(f"xcrun --sdk {sdk_name} --show-sdk-path", shell=True, stdout=subprocess.PIPE, check=True)
+    sdk_path = sdk_path.stdout.decode("utf-8").strip()
+    self.cmake_args += [f"-DCMAKE_OSX_SYSROOT={sdk_path}"]
+
+    self.shared_output_name = "libdobby.dylib"
+    self.static_output_name = "libdobby.a"
+
+  @classmethod
+  def lipo_create_fat(cls, project_dir, platform, output_name):
+    files = list()
+    archs = platforms[platform]
+    for arch in archs:
+      file = f"{project_dir}/build/{platform}/{arch}/{output_name}"
+      files.append(file)
+
+    fat_output_dir = f"{project_dir}/build/{platform}/universal"
+    subprocess.run(["mkdir", "-p", "{}".format(fat_output_dir)], check=True)
+    cmd = ["lipo", "-create"] + files + ["-output", f"{fat_output_dir}/{output_name}"]
+    subprocess.run(cmd, check=True)
+
+
+if __name__ == "__main__":
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--platform", type=str, required=True)
+  parser.add_argument("--arch", type=str, required=True)
+  parser.add_argument("--library_build_type", type=str, default="static")
+  parser.add_argument("--android_ndk_dir", type=str)
+  parser.add_argument("--cmake_dir", type=str)
+  parser.add_argument("--llvm_dir", type=str)
+  args = parser.parse_args()
+
+  logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+  platform = args.platform
+  arch = args.arch
+  library_build_type = args.library_build_type
+
+  PlatformBuilder.cmake_dir = args.cmake_dir
+  PlatformBuilder.llvm_dir = args.llvm_dir
+
+  project_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+  logging.info("project dir: {}".format(project_dir))
+  if not os.path.exists(f"{project_dir}/CMakeLists.txt"):
+    logging.error("Please run this script in Dobby project root directory")
+    sys.exit(1)
+
+  if platform not in platforms:
+    logging.error("invalid platform {}".format(platform))
+    sys.exit(-1)
+
+  if arch != "all" and arch not in platforms[platform]:
+    logging.error("invalid arch {} for platform {}".format(arch, platform))
+    sys.exit(-1)
+
+  if platform == "android":
+    if args.android_ndk_dir is None:
+      logging.error("ndk dir is required for android platform")
+      sys.exit(-1)
+
+  archs = list()
+  if arch == "all":
+    archs = platforms[platform]
+  else:
+    archs.append(arch)
+  logging.info("build platform: {}, archs: {}".format(platform, archs))
+
+  builder: PlatformBuilder = None
+  for arch_ in archs:
+    if platform == "macos":
+      builder = DarwinPlatformBuilder(project_dir, library_build_type, platform, arch_)
+    elif platform == "iphoneos":
+      builder = DarwinPlatformBuilder(project_dir, library_build_type, platform, arch_)
+    elif platform == "android":
+      builder = AndroidPlatformBuilder(args.android_ndk_dir, project_dir, library_build_type, arch_)
+    elif platform == "linux":
+      builder = LinuxPlatformBuilder(project_dir, library_build_type, arch_)
+    else:
+      logging.error("invalid platform {}".format(platform))
+      sys.exit(-1)
+    logging.info(
+      f"build platform: {platform}, arch: {arch_}, cmake_build_dir: {builder.cmake_build_dir}, output_dir: {builder.output_dir}"
+    )
+    builder.build()
+
+  if platform in ["iphoneos", "macos"] and arch == "all":
+    DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.shared_output_name)
+    DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.static_output_name)    super().__init__(project_dir, library_build_type, "linux", arch)
 
     self.shared_output_name = "libdobby.so"
     self.static_output_name = "libdobby.a"
