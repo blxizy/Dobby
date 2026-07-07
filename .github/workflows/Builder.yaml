@@ -4,11 +4,14 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch: # <--- Добавь эту строчку для ручного запуска
+  workflow_dispatch: # Ручной запуск
+
+# Выдаем права на запись для управления релизами и тегами
+permissions:
+  contents: write
 
 env:
   CMAKE_VERSION: 3.25.2
-# ... дальше весь код остаётся без изменений
   LLVM_VERSION: 15.0.6
   NDK_VERSION: r25b
 
@@ -17,22 +20,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: checkout master
-      uses: actions/checkout@master
+      uses: actions/checkout@v4
 
     - name: delete latest release
-      uses: dev-drprasad/delete-tag-and-release@v0.2.1
-      with:
-        delete_release: true
-        tag_name: latest
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Используем GitHub CLI. '|| true' позволяет шагу завершиться успешно, даже если тега/релиза еще нет.
+      run: |
+        gh release delete latest --cleanup-tag --yes || true
 
   linux_and_android:
     runs-on: ubuntu-latest
     needs: delete_latest_release
     steps:
     - name: checkout master
-      uses: actions/checkout@master
+      uses: actions/checkout@v4
 
     - name: init linux cross compile env
       run: |
@@ -76,7 +78,7 @@ jobs:
     needs: delete_latest_release
     steps:
     - name: checkout dev
-      uses: actions/checkout@master
+      uses: actions/checkout@v4
 
     - name: init macos compile env
       run: |
