@@ -243,9 +243,12 @@ if __name__ == "__main__":
 
   if platform in ["iphoneos", "macos"] and arch == "all":
     DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.shared_output_name)
-    DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.static_output_name)      "x86_64": "x86_64-linux-gnu",
-      "arm": "arm-linux-gnueabi",
-      "aarch64": "aarch64-linux-gnu",
+    DarwinPlatformBuilder.lipo_create_fat(project_dir, platform, builder.static_output_name)
+        
+        targets = {
+            "x86_64": "x86_64-linux-gnu",
+            "arm": "arm-linux-gnueabi",
+            "aarch64": "aarch64-linux-gnu"
     }
 
     # self.cmake_args += ["--target={}".format(targets[arch])]
